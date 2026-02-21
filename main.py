@@ -12,9 +12,8 @@ API_ID = 2040
 API_HASH = 'b18441a1ff607e10a989891a5462e627'
 
 # 从环境变量获取你之前提取到的 Session 和钉钉 Webhook
-SESSION_STRING = os.environ.get('1BVtsOK4BuyOQUo83DoU7RBrK4C4bTfICaahU7QwNg100AHDHqA1NKglOnuQbP3DrvvHIBf2LZRZ91XHsU0FMtpAgkAWdcHFn5IFNNg3F4l45qg9zeoqgZgm584Wu2JIY9mmMpI6g0nPF_goSpF1adUkYBIKy4sQD
-w8WnVlWAEtMIkdnvDbAFu789eeAbXnrxFn1huuCT85djRcVcRtb1gZ-VgYPZYibb_-mT6kch03G_RXA4lCL2YRYWCQPtv0-YvdRJpfKEpjHMdQwDhM2sJdltwyzwGh7OHmJOwFZbTDYNsAtuKM-istMhJEblNm7xktgSqqAuzRyzpkrgFJCIZhvWIQUKhG4=', '')
-DINGTALK_WEBHOOK = os.environ.get('https://oapi.dingtalk.com/robot/send?access_token=0cf32cd665bb96c8e42f4805ff9d9739b1522035d65c65411a2ce52fb5e930b3', '')
+SESSION_STRING = os.environ.get('SESSION_STRING', '')
+DINGTALK_WEBHOOK = os.environ.get('DINGTALK_WEBHOOK', '')
 
 # 监听的目标群组和目标人
 TARGET_CHAT = 'btcwhitelulu'  # 白露加密情报局
