@@ -15,24 +15,19 @@ DINGTALK_WEBHOOK = os.environ.get('DINGTALK_WEBHOOK', '')
 
 TARGET_CHAT = 'btcwhitelulu'  
 TARGET_USER = 'btcwhitelu'    
-
-# 获取 Render 自动分配的公网域名 (用来给图片生成外链)
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')
 # ============================================
 
 app = Flask(__name__)
-
-# 创建一个临时文件夹用来存放下载的图片
 DOWNLOAD_DIR = 'downloads'
+
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-# 网页首页 (用于 UptimeRobot 保活)
 @app.route('/')
 def index():
-    return "Telegram 监听机器人运行中（支持图片转发）！"
+    return "Telegram 监听机器人运行中！"
 
-# 新增功能：将下载的图片暴露为外链，供钉钉读取
 @app.route('/media/<path:filename>')
 def serve_media(filename):
     return send_from_directory(DOWNLOAD_DIR, filename)
@@ -42,49 +37,58 @@ def run_telethon():
     asyncio.set_event_loop(loop)
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-    @client.on(events.NewMessage(chats=TARGET_CHAT, from_users=TARGET_USER))
+    # 【改动1】放宽条件：只锁定群组，先把群里所有人的消息都抓进来看看
+    @client.on(events.NewMessage(chats=TARGET_CHAT))
     async def handler(event):
-        msg_text = event.raw_text or ""
-        photo_url = ""
+        try:
+            # 获取真实发件人
+            sender = await event.get_sender()
+            sender_username = sender.username if sender and hasattr(sender, 'username') else "无"
+            
+            # 【核心排错】把每一条消息的动态打印到 Render 日志里
+            print(f"[日志] 收到群消息 | 发件人: @{sender_username} | 内容: {str(event.raw_text)[:20]}...")
 
-        # 【核心逻辑】如果消息包含图片，则下载并生成外链
-        if event.photo:
-            try:
+            # 【改动2】手动精准核对是不是白露发出来的（忽略大小写）
+            if not sender_username or sender_username.lower() != TARGET_USER.lower():
+                return
+
+            msg_text = event.raw_text or ""
+            photo_url = ""
+
+            # 【改动3】如果是转发的消息，加上专门的标记，防止文本为空
+            if event.forward:
+                msg_text = f"*(转发消息)* \n{msg_text}"
+
+            # 处理图片
+            if event.photo:
                 print("检测到图片，正在下载...")
-                # 下载图片到 downloads 文件夹
                 path = await event.download_media(DOWNLOAD_DIR)
                 filename = os.path.basename(path)
-                # 拼接成能在公网访问的图片 URL
                 if RENDER_URL:
                     photo_url = f"{RENDER_URL}/media/{filename}"
                 print(f"图片下载成功：{photo_url}")
-            except Exception as e:
-                print(f"下载图片失败: {e}")
 
-        # 构造钉钉 Markdown 消息 (支持图文并茂)
-        # 这里的 title 必须包含你设定的关键词（如"TG转发"）
-        md_text = f"### 【TG转发】白露发话啦：\n\n{msg_text}\n\n"
-        
-        if photo_url:
-            # 插入图片 Markdown 语法
-            md_text += f"![图片]({photo_url})\n"
-        elif event.media and not event.photo:
-            # 如果是视频、文件、动态表情包等非静态图片，提示文字
-            md_text += "\n> *(附带了一个视频/文件/动态表情包，请前往 Telegram 查看)*"
+            md_text = f"### 【TG转发】白露发话啦：\n\n{msg_text}\n\n"
+            
+            if photo_url:
+                md_text += f"![图片]({photo_url})\n"
+            elif event.media and not event.photo:
+                md_text += "\n> *(附带了一个视频/文件/动态表情包，请前往 Telegram 查看)*"
 
-        payload = {
-            "msgtype": "markdown",
-            "markdown": {
-                "title": "TG转发",
-                "text": md_text
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {
+                    "title": "TG转发",
+                    "text": md_text
+                }
             }
-        }
-        
-        try:
-            requests.post(DINGTALK_WEBHOOK, json=payload)
-            print("成功转发一条 Markdown 消息到钉钉！")
+            
+            # 【改动4】把钉钉的回执打印出来，看钉钉有没有偷偷拒收
+            res = requests.post(DINGTALK_WEBHOOK, json=payload)
+            print(f"钉钉发送结果: {res.status_code} - {res.text}")
+            
         except Exception as e:
-            print(f"转发钉钉失败: {e}")
+            print(f"处理消息时发生错误: {e}")
 
     print("开始监听白露的消息...")
     client.start()
