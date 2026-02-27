@@ -13,21 +13,28 @@ API_HASH = 'b18441a1ff607e10a989891a5462e627'
 SESSION_STRING = os.environ.get('SESSION_STRING', '')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')
 
-# 【核心修改：通过环境变量动态加载多路由规则】
+# 【核心修改：支持子区(Topic)的动态路由规则】
 ROUTING_RULES = []
 
-# 支持最多配置 10 组转发规则（如果不够可以把 11 改得更大）
 for i in range(1, 11):
-    # 从环境变量读取，例如 CHANNELS_1, USERS_1, WEBHOOK_1
     channels_env = os.environ.get(f'CHANNELS_{i}')
     users_env = os.environ.get(f'USERS_{i}')
     webhook_env = os.environ.get(f'WEBHOOK_{i}')
     
     if channels_env and users_env and webhook_env:
+        channels_parsed = []
+        # 解析频道的格式，支持 "群名" 或 "群名/TopicID"
+        for c in channels_env.split(','):
+            c = c.strip()
+            if '/' in c:
+                parts = c.split('/')
+                channels_parsed.append({"name": parts[0].strip(), "topic": int(parts[1].strip())})
+            else:
+                channels_parsed.append({"name": c, "topic": None})
+
         ROUTING_RULES.append({
             "name": f"路由规则_{i}",
-            # 使用英文逗号分割字符串，并清除两边的空格
-            "channels": [c.strip() for c in channels_env.split(',')],
+            "channels": channels_parsed,
             "users": [u.strip() for u in users_env.split(',')],
             "webhook": webhook_env.strip()
         })
@@ -52,14 +59,15 @@ def run_telethon():
     asyncio.set_event_loop(loop)
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-    # 提取所有需要监听的频道
+    # 提取所有需要监听的主频道名称交给 Telethon（如果是子区，也要先监听主群）
     target_chats = set()
     for rule in ROUTING_RULES:
-        target_chats.update(rule["channels"])
+        for c in rule["channels"]:
+            target_chats.add(c["name"])
     target_chats = list(target_chats)
     
     if not target_chats:
-        print("[警告] 未检测到任何路由规则！请检查环境变量 CHANNELS_1 等是否配置正确。")
+        print("[警告] 未检测到任何路由规则！")
 
     @client.on(events.NewMessage(chats=target_chats))
     async def handler(event):
@@ -71,19 +79,34 @@ def run_telethon():
             sender = await event.get_sender()
             sender_username = sender.username if sender and hasattr(sender, 'username') else "无"
             
+            # 【关键修改：获取当前消息所在的子区 Topic ID】
+            msg_topic_id = None
+            if event.message.reply_to:
+                # Telethon 中子区的消息本质上是回复主贴，所以这样获取 Topic ID
+                msg_topic_id = getattr(event.message.reply_to, 'reply_to_top_id', None) or getattr(event.message.reply_to, 'reply_to_msg_id', None)
+
             # 匹配当前消息符合哪些规则
             matched_webhooks = []
             for rule in ROUTING_RULES:
-                rule_channels = [str(c).lower() for c in rule["channels"]]
-                if str(chat_identifier).lower() in rule_channels:
-                    rule_users = [str(u).lower() for u in rule["users"]]
-                    if sender_username.lower() in rule_users:
-                        matched_webhooks.append(rule["webhook"])
+                for rule_channel in rule["channels"]:
+                    # 1. 检查主群名是否匹配
+                    if str(chat_identifier).lower() == str(rule_channel["name"]).lower():
+                        # 2. 如果规则中指定了子区(Topic)，检查是否匹配
+                        if rule_channel["topic"] is not None:
+                            if msg_topic_id != rule_channel["topic"]:
+                                continue # 如果这条消息不在指定的子区里，直接跳过这条规则
+                        
+                        # 3. 检查发件人是否匹配
+                        rule_users = [str(u).lower() for u in rule["users"]]
+                        if sender_username.lower() in rule_users:
+                            matched_webhooks.append(rule["webhook"])
             
             if not matched_webhooks:
                 return
 
-            print(f"[日志] 收到匹配消息 | 群组: {chat_title} | 发件人: @{sender_username}")
+            # 如果匹配上了，判断是否有专属子区，在日志和钉钉里显示得更清楚一点
+            topic_log = f" [子区:{msg_topic_id}]" if msg_topic_id else ""
+            print(f"[日志] 收到匹配消息 | 群组: {chat_title}{topic_log} | 发件人: @{sender_username}")
 
             msg_text = event.raw_text or ""
             media_url = ""
@@ -103,7 +126,10 @@ def run_telethon():
 
             msg_time = (event.date + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
 
-            md_text = f"**频道：** {chat_title}\n\n"
+            # 钉钉展示：如果是在子区里，把子区 ID 也显示出来，方便追溯
+            display_chat_name = f"{chat_title} (子区: {msg_topic_id})" if msg_topic_id else chat_title
+
+            md_text = f"**频道：** {display_chat_name}\n\n"
             md_text += f"**时间：** {msg_time}\n\n"
             content_text = msg_text if msg_text.strip() else "*(仅附件/媒体)*"
             md_text += f"**内容：** \n{content_text}\n\n"
